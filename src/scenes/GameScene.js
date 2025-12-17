@@ -60,23 +60,36 @@ export default class GameScene extends Phaser.Scene {
     this.jumpSpinTween = null;
     this.baseBody = { width: 40, height: 28, offsetX: 7, offsetY: 6 };
     this.jumpSpinTween = null;
+    this.currentLevel = 1;
+    this.levelTransitionTriggered = false;
+    this.finishLine = null;
+    this.fireworks = null;
   }
 
   preload() {
-    // Build simple textures at runtime so no external assets are needed
-    this.createPlaceholderTextures();
+    this.load.image('bus', 'assets/images/bus.png');
+    this.load.image('background', 'assets/images/background.png');
+    this.load.image('ground', 'assets/images/ground.png');
   }
 
   create() {
-    this.resetState();
-    this.createBackground();
-    this.createWorld();
-    this.createPlayer();
-    this.createObstacles();
-    this.createPowerups();
-    this.createCamera();
-    this.createControls();
-    this.addHUD();
+    try {
+      // Build simple textures at runtime so no external assets are needed
+      this.createPlaceholderTextures();
+      
+      this.resetState();
+      this.createBackground();
+      this.createWorld();
+      this.createPlayer();
+      this.createObstacles();
+      this.createPowerups();
+      this.createCamera();
+      this.createControls();
+      this.addHUD();
+    } catch (e) {
+      console.error(e);
+      this.add.text(10, 10, 'Error: ' + e.message, { fill: '#ff0000', backgroundColor: '#000' }).setScrollFactor(0).setDepth(999);
+    }
   }
 
   resetState() {
@@ -137,7 +150,9 @@ export default class GameScene extends Phaser.Scene {
       return;
     }
     // Core game loop: collect input, apply physics impulses, spawn/cleanup obstacles, then update visuals
+    // Core game loop: collect input, apply physics impulses, spawn/cleanup obstacles, then update visuals
     this.updateScore();
+    this.checkLevelTransition();
     this.updateRunnerSpeed();
     this.handlePlayerInput();
     this.spawnObstaclesIfNeeded();
@@ -150,54 +165,101 @@ export default class GameScene extends Phaser.Scene {
   }
 
   createBackground() {
-    // Simple parallax layers using colored rectangles; wide enough to cover camera travel
-    const sky = this.add.rectangle(0, 0, this.levelWidth + this.scale.width * 2, this.scale.height, 0xdaf0ff)
+    // Background using the new asset
+    // We use a TileSprite so it can scroll if we wanted, but here we just stretch it to cover the screen
+    // or use it as a static background with scroll factor 0
+    this.bg = this.add.tileSprite(0, 0, this.scale.width, this.scale.height, 'background')
       .setOrigin(0, 0)
       .setScrollFactor(0);
-    sky.depth = -3;
-
-    const farHills = this.add.rectangle(0, this.scale.height - 220, this.levelWidth + this.scale.width * 2, 220, 0xb8d0ff)
-      .setOrigin(0, 0)
-      .setScrollFactor(0.2);
-    farHills.depth = -2;
-
-    const midHills = this.add.rectangle(0, this.scale.height - 170, this.levelWidth + this.scale.width * 2, 170, 0xa2c7ff)
-      .setOrigin(0, 0)
-      .setScrollFactor(0.35);
-    midHills.depth = -1;
+    
+    // Scale background to fit height if needed
+    // Assuming the background image is landscape
+    this.bg.setDisplaySize(this.scale.width, this.scale.height);
+    this.bg.depth = -3;
   }
 
   createPlaceholderTextures() {
     // Bike + rider rectangle with wheels
+    // Enhanced Bus Graphics
     const playerGfx = this.add.graphics();
-    playerGfx.fillStyle(0xff6fa7, 1);
-    playerGfx.fillRoundedRect(0, 0, 54, 34, 8);
-    playerGfx.fillStyle(0xffffff, 1);
-    playerGfx.fillCircle(14, 30, 8);
-    playerGfx.fillCircle(40, 30, 8);
-    playerGfx.generateTexture('player-bike', 54, 38);
+    
+    // Main body (Yellow)
+    playerGfx.fillStyle(0xffd700, 1); // Gold/Yellow
+    playerGfx.fillRoundedRect(0, 0, 60, 40, 8);
+    
+    // Roof/Stripe (Red)
+    playerGfx.fillStyle(0xff4d4d, 1);
+    playerGfx.fillRoundedRect(0, 0, 60, 12, { tl: 8, tr: 8, bl: 0, br: 0 });
+    
+    // Windows (Light Blue)
+    playerGfx.fillStyle(0x87ceeb, 1);
+    playerGfx.fillRect(5, 14, 14, 12);
+    playerGfx.fillRect(23, 14, 14, 12);
+    playerGfx.fillRect(41, 14, 14, 12);
+    
+    // Wheels (Black + Grey hubcap)
+    playerGfx.fillStyle(0x333333, 1);
+    playerGfx.fillCircle(14, 40, 7);
+    playerGfx.fillCircle(46, 40, 7);
+    playerGfx.fillStyle(0xcccccc, 1);
+    playerGfx.fillCircle(14, 40, 3);
+    playerGfx.fillCircle(46, 40, 3);
+
+    playerGfx.generateTexture('player-bus-gfx', 60, 48);
     playerGfx.destroy();
 
-    // Low obstacle block
+    // Low obstacle: Traffic Cone
     const obstacleGfx = this.add.graphics();
-    obstacleGfx.fillStyle(0x5c7aff, 1);
-    obstacleGfx.fillRoundedRect(0, 0, 46, 46, 6);
+    // Base
+    obstacleGfx.fillStyle(0xff8c00, 1); // Dark Orange
+    obstacleGfx.fillRoundedRect(4, 38, 38, 8, 2);
+    // Cone body
+    obstacleGfx.fillStyle(0xffa500, 1); // Orange
+    obstacleGfx.beginPath();
+    obstacleGfx.moveTo(8, 38);
+    obstacleGfx.lineTo(23, 0);
+    obstacleGfx.lineTo(38, 38);
+    obstacleGfx.fillPath();
+    // Stripes
+    obstacleGfx.fillStyle(0xffffff, 1);
+    obstacleGfx.beginPath();
+    obstacleGfx.moveTo(13, 26);
+    obstacleGfx.lineTo(23, 26);
+    obstacleGfx.lineTo(33, 26);
+    obstacleGfx.lineTo(31, 20);
+    obstacleGfx.lineTo(15, 20);
+    obstacleGfx.fillPath();
+    
     obstacleGfx.generateTexture('obstacle', 46, 46);
     obstacleGfx.destroy();
 
-    // High obstacle for future slide mechanic
+    // High obstacle: Traffic Barrier / Sign
     const obstacleHighGfx = this.add.graphics();
-    obstacleHighGfx.fillStyle(0x334d8c, 1);
-    obstacleHighGfx.fillRoundedRect(0, 0, 46, 90, 6);
+    // Posts
+    obstacleHighGfx.fillStyle(0x555555, 1);
+    obstacleHighGfx.fillRect(8, 40, 6, 50);
+    obstacleHighGfx.fillRect(32, 40, 6, 50);
+    // Sign Board
+    obstacleHighGfx.fillStyle(0xffd700, 1); // Yellow background
+    obstacleHighGfx.fillRoundedRect(0, 0, 46, 46, 4);
+    obstacleHighGfx.lineStyle(2, 0x000000);
+    obstacleHighGfx.strokeRoundedRect(0, 0, 46, 46, 4);
+    // Symbol (!)
+    obstacleHighGfx.fillStyle(0x000000, 1);
+    obstacleHighGfx.fillRect(21, 10, 4, 18);
+    obstacleHighGfx.fillCircle(23, 34, 2.5);
+
     obstacleHighGfx.generateTexture('obstacle-high', 46, 90);
     obstacleHighGfx.destroy();
 
-    // Ground patch
+    // Ground patch - REMOVED (using image asset 'ground')
+    /*
     const groundGfx = this.add.graphics();
     groundGfx.fillStyle(0x8dd16a, 1);
     groundGfx.fillRect(0, 0, 128, 32);
     groundGfx.generateTexture('ground', 128, 32);
     groundGfx.destroy();
+    */
 
     // Power-ups
     const invGfx = this.add.graphics();
@@ -232,6 +294,57 @@ export default class GameScene extends Phaser.Scene {
     hudInv.strokeRoundedRect(0, 0, 24, 24, 8);
     hudInv.generateTexture('hud-power-inv', 24, 24);
     hudInv.destroy();
+
+    // Procedural Desert Background
+    const desertGfx = this.add.graphics();
+    // Sky
+    desertGfx.fillStyle(0x87CEEB, 1);
+    desertGfx.fillRect(0, 0, 800, 600);
+    // Sun
+    desertGfx.fillStyle(0xFFD700, 1);
+    desertGfx.fillCircle(700, 100, 40);
+    // Dunes (Back)
+    desertGfx.fillStyle(0xDEB887, 1); // Burlywood
+    desertGfx.beginPath();
+    desertGfx.moveTo(0, 400);
+    desertGfx.lineTo(200, 350);
+    desertGfx.lineTo(400, 420);
+    desertGfx.lineTo(600, 380);
+    desertGfx.lineTo(800, 400);
+    desertGfx.lineTo(800, 600);
+    desertGfx.lineTo(0, 600);
+    desertGfx.fillPath();
+    // Dunes (Front)
+    desertGfx.fillStyle(0xD2B48C, 1); // Tan
+    desertGfx.beginPath();
+    desertGfx.moveTo(0, 500);
+    desertGfx.lineTo(250, 450);
+    desertGfx.lineTo(500, 520);
+    desertGfx.lineTo(800, 480);
+    desertGfx.lineTo(800, 600);
+    desertGfx.lineTo(0, 600);
+    desertGfx.fillPath();
+    desertGfx.generateTexture('background-desert', 800, 600);
+    desertGfx.destroy();
+
+    // Finish Line Arch
+    const finishGfx = this.add.graphics();
+    // Poles
+    finishGfx.fillStyle(0x888888, 1);
+    finishGfx.fillRect(0, 0, 10, 200);
+    finishGfx.fillRect(90, 0, 10, 200);
+    // Banner
+    finishGfx.fillStyle(0xFFFFFF, 1);
+    finishGfx.fillRect(0, 20, 100, 40);
+    // Checkers
+    finishGfx.fillStyle(0x000000, 1);
+    for(let r=0; r<2; r++) {
+        for(let c=0; c<5; c++) {
+            if ((r+c)%2===0) finishGfx.fillRect(10 + c*16, 20 + r*20, 16, 20);
+        }
+    }
+    finishGfx.generateTexture('finish-line', 100, 200);
+    finishGfx.destroy();
   }
 
   createWorld() {
@@ -240,6 +353,8 @@ export default class GameScene extends Phaser.Scene {
     for (let x = 0; x < this.levelWidth; x += 128) {
       const tile = this.ground.create(x + 64, groundY, 'ground');
       tile.setOrigin(0.5, 0.5);
+      // Force size to match the loop spacing to avoid gaps/overlaps
+      tile.setDisplaySize(128, 32);
       tile.refreshBody();
     }
 
@@ -248,9 +363,18 @@ export default class GameScene extends Phaser.Scene {
   }
 
   createPlayer() {
-    this.player = this.physics.add.sprite(120, this.scale.height - 140, 'player-bike');
+    this.player = this.physics.add.sprite(120, this.scale.height - 140, 'player-bus-gfx');
+    
+    // Reset any previous scaling
+    this.player.setScale(1);
+    this.baseScaleX = 1;
+    this.baseScaleY = 1;
+
     this.player.setCollideWorldBounds(true);
-    this.player.setSize(this.baseBody.width, this.baseBody.height).setOffset(this.baseBody.offsetX, this.baseBody.offsetY);
+    // Adjust body to fit the new graphics (60x48 visual, but hitbox slightly smaller)
+    this.player.body.setSize(50, 40);
+    this.player.body.setOffset(5, 4);
+    
     this.player.setDragX(1400);
     this.player.setMaxVelocity(360, 1000);
     this.player.body.setAllowRotation(false);
@@ -397,6 +521,12 @@ export default class GameScene extends Phaser.Scene {
     const now = this.time.now;
     if (now < this.nextSpawnAt) return;
 
+    // Safe zone before Level 2 transition (at 500)
+    // Stop spawning at 400 to give ~3 seconds of clear running before the finish line
+    if (this.currentLevel === 1 && this.score > 400) {
+        return;
+    }
+
     // Frequency ramps up slowly with an eased, clamped difficulty factor to stay predictable
     const normalized = Phaser.Math.Clamp((now - this.runStartTime) / 30000, 0, 1); // 30s to full difficulty
     const difficultyEase = Phaser.Math.Easing.Cubic.Out(normalized);
@@ -425,8 +555,8 @@ export default class GameScene extends Phaser.Scene {
     const key = isHigh ? 'obstacle-high' : 'obstacle';
     const obstacle = this.obstacles.create(spawnX, baseY, key);
     obstacle.setOrigin(0.5, 1);
-    const tintPalette = isHigh ? [0x334d8c, 0x3c5cb5, 0x2e4a96] : [0x5c7aff, 0x6c9dff, 0x4e63ff];
-    obstacle.setTint(Phaser.Utils.Array.GetRandom(tintPalette));
+    // const tintPalette = isHigh ? [0x334d8c, 0x3c5cb5, 0x2e4a96] : [0x5c7aff, 0x6c9dff, 0x4e63ff];
+    // obstacle.setTint(Phaser.Utils.Array.GetRandom(tintPalette));
     obstacle.refreshBody();
   }
 
@@ -515,11 +645,11 @@ export default class GameScene extends Phaser.Scene {
       const bobScaleY = 1 + Math.sin(now * 0.02) * 0.04; // subtle vertical bob
       const leanBase = 5;
       const leanOsc = Math.sin(now * 0.08) * 2; // tiny oscillation to imply wheel spin
-      this.player.setScale(1, bobScaleY);
+      this.player.setScale(this.baseScaleX, this.baseScaleY * bobScaleY);
       this.player.setAngle(leanBase + leanOsc);
     } else {
       // Reset visuals when idle or in-air (no double-tilt while jumping)
-      this.player.setScale(1, 1);
+      this.player.setScale(this.baseScaleX, this.baseScaleY);
     }
   }
 
@@ -919,6 +1049,97 @@ export default class GameScene extends Phaser.Scene {
       // ignore storage errors
     }
     return sorted;
+  }
+
+  checkLevelTransition() {
+    if (this.currentLevel === 1 && this.score >= 500 && !this.levelTransitionTriggered) {
+      this.triggerLevelTransition();
+    }
+  }
+
+  triggerLevelTransition() { 
+    this.levelTransitionTriggered = true;
+    
+    // Spawn Finish Line ahead of player
+    const camera = this.cameras.main;
+    const spawnX = camera.scrollX + this.scale.width + 100;
+    const groundY = this.scale.height - 40;
+    
+    this.finishLine = this.physics.add.image(spawnX, groundY, 'finish-line');
+    this.finishLine.setOrigin(0.5, 1);
+    this.finishLine.body.setAllowGravity(false);
+    this.finishLine.body.setImmovable(true);
+    
+    // Detect overlap to trigger fireworks and switch
+    this.physics.add.overlap(this.player, this.finishLine, () => {
+        if (this.currentLevel === 1) {
+            this.completeLevelOne();
+        }
+    });
+  }
+
+  completeLevelOne() {
+    this.currentLevel = 2; // Prevent multiple triggers
+    
+    // Fireworks Effect
+    const particles = this.add.particles(0, 0, 'power-jump', {
+        speed: { min: -200, max: 200 },
+        angle: { min: 0, max: 360 },
+        scale: { start: 0.5, end: 0 },
+        blendMode: 'ADD',
+        lifespan: 1000,
+        gravityY: 200,
+        quantity: 20,
+        emitting: false
+    });
+    
+    // Burst 1
+    particles.explode(50, this.player.x, this.player.y - 100);
+    // Burst 2
+    this.time.delayedCall(300, () => particles.explode(50, this.player.x + 50, this.player.y - 150));
+    // Burst 3
+    this.time.delayedCall(600, () => particles.explode(50, this.player.x - 50, this.player.y - 120));
+
+    // Text Feedback
+    const levelText = this.add.text(this.player.x, this.player.y - 100, 'LEVEL 2: DESERT!', {
+        fontSize: '32px',
+        color: '#ff0000',
+        fontStyle: 'bold',
+        stroke: '#ffffff',
+        strokeThickness: 4
+    }).setOrigin(0.5);
+    
+    this.tweens.add({
+        targets: levelText,
+        y: levelText.y - 50,
+        alpha: 0,
+        duration: 2000,
+        onComplete: () => levelText.destroy()
+    });
+
+    // Change Background
+    if (this.bg) {
+        this.bg.setTexture('background-desert');
+    }
+
+    // Tint Ground to look like sand
+    if (this.ground) {
+        this.ground.children.iterate((child) => {
+            if (child) child.setTint(0xddc98c);
+        });
+    }
+
+    // Pause obstacle spawning for 3 seconds (Safe Zone)
+    this.nextSpawnAt = this.time.now + 3000;
+    
+    // Cleanup finish line after it passes screen
+    this.time.delayedCall(3000, () => {
+        if (this.finishLine) {
+            this.finishLine.destroy();
+            this.finishLine = null;
+        }
+        particles.destroy();
+    });
   }
 
   updatePowerRing() {
