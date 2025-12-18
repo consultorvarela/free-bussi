@@ -65,6 +65,7 @@ export default class GameScene extends Phaser.Scene {
     this.levelTransitionTriggered = false;
     this.finishLine = null;
     this.fireworks = null;
+    this.isRestarting = false;
   }
 
   preload() {
@@ -137,6 +138,11 @@ export default class GameScene extends Phaser.Scene {
     this.isSpinning = false;
     this.spinEndAt = 0;
     this.spinCooldownAt = 0;
+    // Reset level variables
+    this.currentLevel = 1;
+    this.levelTransitionTriggered = false;
+    this.finishLine = null; // Will be recreated if needed
+    this.isRestarting = false;
   }
 
   update() {
@@ -144,8 +150,12 @@ export default class GameScene extends Phaser.Scene {
       if (this.isEnteringInitials) {
         return;
       }
-      // Restart loop: wait for SPACE, then use scene.restart() to reset the run without reloading
-      if (Phaser.Input.Keyboard.JustDown(this.jumpKey)) {
+      // Restart loop: wait for SPACE, UP arrow, or click, then restart
+      const spacePressed = Phaser.Input.Keyboard.JustDown(this.jumpKey);
+      const upPressed = Phaser.Input.Keyboard.JustDown(this.cursors.up);
+      const anyPressed = spacePressed || upPressed;
+
+      if (anyPressed) {
         this.restartFromUI();
       }
       return;
@@ -468,7 +478,7 @@ export default class GameScene extends Phaser.Scene {
   }
 
   handlePlayerInput() {
-    if (!this.player || this.gameOver) return;
+    if (!this.player || !this.player.body || this.gameOver) return;
 
     const now = this.time.now;
     const onGround = this.player.body.blocked.down;
@@ -556,12 +566,23 @@ export default class GameScene extends Phaser.Scene {
     const key = isHigh ? 'obstacle-high' : 'obstacle';
     const obstacle = this.obstacles.create(spawnX, baseY, key);
     obstacle.setOrigin(0.5, 1);
-    // const tintPalette = isHigh ? [0x334d8c, 0x3c5cb5, 0x2e4a96] : [0x5c7aff, 0x6c9dff, 0x4e63ff];
-    // obstacle.setTint(Phaser.Utils.Array.GetRandom(tintPalette));
+
+    // Adjust hitbox to match visible area (not the full 46x46 texture)
+    if (isHigh) {
+      // High obstacle: sign board area
+      obstacle.body.setSize(40, 80);
+      obstacle.body.setOffset(3, 10);
+    } else {
+      // Low obstacle: cone triangle area (excluding empty space)
+      obstacle.body.setSize(32, 40);
+      obstacle.body.setOffset(7, 6);
+    }
+
     obstacle.refreshBody();
   }
 
   cleanupObstacles() {
+    if (!this.obstacles || !this.obstacles.children) return;
     const cameraLeft = this.cameras.main.scrollX;
     this.obstacles.children.iterate((child) => {
       if (!child || !child.active) return;
@@ -583,6 +604,7 @@ export default class GameScene extends Phaser.Scene {
   }
 
   cleanupPowerups() {
+    if (!this.powerups || !this.powerups.children) return;
     const cameraLeft = this.cameras.main.scrollX;
     this.powerups.children.iterate((child) => {
       if (!child || !child.active) return;
@@ -601,7 +623,7 @@ export default class GameScene extends Phaser.Scene {
   }
 
   updatePlayerState() {
-    if (!this.player) return;
+    if (!this.player || !this.player.body) return;
 
     const onGround = this.player.body.blocked.down;
     const moving = Math.abs(this.player.body.velocity.x) > 20;
@@ -655,7 +677,7 @@ export default class GameScene extends Phaser.Scene {
   }
 
   handleObstacleHit(player, obstacle) {
-    if (this.gameOver) return;
+    if (this.gameOver || !this.player || !this.player.body) return;
     if (this.isInvincible) {
       // Consume shield on first hit, restore normal color
       this.isInvincible = false;
@@ -666,14 +688,27 @@ export default class GameScene extends Phaser.Scene {
       return;
     }
     this.gameOver = true;
+    this.isEnteringInitials = true; // Block input temporarily while loading
 
     this.physics.world.pause();
     this.cameras.main.shake(120, 0.01);
     this.player.setTint(0xff5252);
     this.player.setVelocity(0, 0);
     this.player.body.setGravityY(0);
-    // Enter a paused state; update() listens for SPACE to call scene.restart() and rebuild the run
-    this.showGameOverMessage();
+
+    // Show loading message immediately
+    const { centerX, centerY } = this.cameras.main;
+    const loadingText = this.add.text(centerX, centerY, 'Loading...', {
+      fontSize: '24px',
+      color: '#0b4b5a',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(100);
+
+    // Enter a paused state; load scores and show panel
+    this.showGameOverMessage().then(() => {
+      // Remove loading text
+      if (loadingText) loadingText.destroy();
+    });
   }
 
   async showGameOverMessage() {
@@ -681,10 +716,13 @@ export default class GameScene extends Phaser.Scene {
     const qualifies = await qualifiesForHighScore(this.score);
     if (qualifies) {
       this.showInitialsEntry(centerX, centerY);
+      // isEnteringInitials already set to true in showInitialsEntry
       return;
     }
     const highScores = await loadHighScores();
     this.showGameOverPanel(centerX, centerY, highScores);
+    // Unblock input so user can press SPACE to restart
+    this.isEnteringInitials = false;
   }
 
   showGameOverPanel(centerX, centerY, highScores) {
@@ -877,9 +915,25 @@ export default class GameScene extends Phaser.Scene {
   }
 
   restartFromUI() {
-    if (!this.gameOver || this.isEnteringInitials) return;
-    this.physics.world.resume();
-    this.scene.restart();
+    if (!this.gameOver || this.isEnteringInitials || this.isRestarting) return;
+
+    // Marcar que estamos reiniciando para evitar doble click
+    this.isRestarting = true;
+
+    // Destruir panel de Game Over primero
+    if (this.gameOverPanel) {
+      this.gameOverPanel.destroy(true);
+      this.gameOverPanel = null;
+    }
+
+    // Limpiar cualquier input handler que pueda quedar
+    this.teardownInitialsInput();
+
+    // Pequeño delay para asegurar que todo se destruya antes de reiniciar
+    this.time.delayedCall(100, () => {
+      this.physics.world.resume();
+      this.scene.restart();
+    });
   }
 
   startSpin(now) {
