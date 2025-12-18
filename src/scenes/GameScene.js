@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { loadHighScores, saveHighScore, qualifiesForHighScore } from '../firebase.js';
 
 export default class GameScene extends Phaser.Scene {
   constructor() {
@@ -34,7 +35,7 @@ export default class GameScene extends Phaser.Scene {
     this.gameOverText = null;
     this.gameOverPanel = null;
     this.isEnteringInitials = false;
-    this.initials = ['A', 'A', 'A'];
+    this.initials = ['_', '_', '_', '_', '_', '_'];
     this.initialsIndex = 0;
     this.initialsText = null;
     this.initialsOverlay = null;
@@ -106,7 +107,7 @@ export default class GameScene extends Phaser.Scene {
     this.scoreText = null;
     this.gameOverText = null;
     this.isEnteringInitials = false;
-    this.initials = ['A', 'A', 'A'];
+    this.initials = ['_', '_', '_', '_', '_', '_'];
     this.initialsIndex = 0;
     this.initialsText = null;
     this.initialsOverlay = null;
@@ -675,13 +676,14 @@ export default class GameScene extends Phaser.Scene {
     this.showGameOverMessage();
   }
 
-  showGameOverMessage() {
+  async showGameOverMessage() {
     const { centerX, centerY } = this.cameras.main;
-    if (this.qualifiesForHighScore(this.score)) {
+    const qualifies = await qualifiesForHighScore(this.score);
+    if (qualifies) {
       this.showInitialsEntry(centerX, centerY);
       return;
     }
-    const highScores = this.loadHighScores().sort((a, b) => b.score - a.score).slice(0, 5);
+    const highScores = await loadHighScores();
     this.showGameOverPanel(centerX, centerY, highScores);
   }
 
@@ -711,7 +713,7 @@ export default class GameScene extends Phaser.Scene {
       align: 'center'
     }).setOrigin(0.5).setScrollFactor(0).setDepth(10);
 
-    const listItems = highScores.map((entry, idx) => `${idx + 1}. ${(entry?.initials || '---').padEnd(3, ' ')} - ${entry?.score ?? 0}`);
+    const listItems = highScores.map((entry, idx) => `${idx + 1}. ${(entry?.initials || '------').padEnd(6, ' ')} - ${entry?.score ?? 0}`);
     const listY = listTitleY + 26;
     const listText = this.add.text(centerX, listY, listItems.join('\n'), {
       fontSize: '16px',
@@ -738,10 +740,10 @@ export default class GameScene extends Phaser.Scene {
 
   showInitialsEntry(centerX, centerY) {
     this.isEnteringInitials = true;
-    this.initials = ['A', 'A', 'A'];
+    this.initials = ['_', '_', '_', '_', '_', '_'];
     this.initialsIndex = 0;
 
-    const panelWidth = 360;
+    const panelWidth = 420;
     const panelHeight = 220;
     const baseY = centerY - panelHeight / 2;
 
@@ -757,7 +759,7 @@ export default class GameScene extends Phaser.Scene {
       align: 'center'
     }).setOrigin(0.5).setScrollFactor(0).setDepth(12);
 
-    const prompt = this.add.text(centerX, baseY + 64, 'ENTER YOUR INITIALS', {
+    const prompt = this.add.text(centerX, baseY + 64, 'ENTER YOUR NAME', {
       fontSize: '16px',
       color: '#0b4b5a',
       fontStyle: 'bold',
@@ -765,7 +767,7 @@ export default class GameScene extends Phaser.Scene {
     }).setOrigin(0.5).setScrollFactor(0).setDepth(12);
 
     this.initialsText = this.add.text(centerX, baseY + 110, this.initials.join(''), {
-      fontSize: '32px',
+      fontSize: '28px',
       color: '#0b4b5a',
       fontStyle: 'bold',
       align: 'center'
@@ -790,17 +792,17 @@ export default class GameScene extends Phaser.Scene {
     const key = event.key.toUpperCase();
     if (key === 'BACKSPACE') {
       this.initialsIndex = Math.max(0, this.initialsIndex - 1);
-      this.initials[this.initialsIndex] = 'A';
+      this.initials[this.initialsIndex] = '_';
       this.updateInitialsText();
       return;
     }
-    if ((key === 'ENTER' || key === ' ') && this.initials.length === 3) {
+    if (key === 'ENTER' || key === ' ') {
       this.submitInitials();
       return;
     }
     if (/^[A-Z]$/.test(key)) {
       this.initials[this.initialsIndex] = key;
-      if (this.initialsIndex < 2) {
+      if (this.initialsIndex < 5) {
         this.initialsIndex += 1;
       }
       this.updateInitialsText();
@@ -811,14 +813,19 @@ export default class GameScene extends Phaser.Scene {
     if (!this.isEnteringInitials) return;
     const leftSide = pointer.x < this.scale.width / 2;
     if (leftSide) {
-      // Cycle current letter forward
-      const current = this.initials[this.initialsIndex].charCodeAt(0) - 65;
-      const next = (current + 1) % 26;
-      this.initials[this.initialsIndex] = String.fromCharCode(65 + next);
+      // Cycle current letter forward (including underscore)
+      const currentChar = this.initials[this.initialsIndex];
+      if (currentChar === '_') {
+        this.initials[this.initialsIndex] = 'A';
+      } else {
+        const current = currentChar.charCodeAt(0) - 65;
+        const next = (current + 1) % 26;
+        this.initials[this.initialsIndex] = String.fromCharCode(65 + next);
+      }
       this.updateInitialsText();
     } else {
       // Move to next letter or submit
-      if (this.initialsIndex < 2) {
+      if (this.initialsIndex < 5) {
         this.initialsIndex += 1;
       } else {
         this.submitInitials();
@@ -827,11 +834,24 @@ export default class GameScene extends Phaser.Scene {
     }
   }
 
-  submitInitials() {
+  async submitInitials() {
     if (!this.isEnteringInitials) return;
-    const initials = this.initials.join('').substring(0, 3);
+    // Reemplazar guiones bajos con espacios vacíos
+    const initials = this.initials.join('').replace(/_/g, ' ').trim();
+
+    // Validar que tenga al menos un carácter
+    if (initials.length === 0) {
+      console.warn('No initials entered, using default');
+      this.teardownInitialsInput();
+      const updated = await saveHighScore(this.score, 'PLAYER');
+      this.showGameOverPanel(this.cameras.main.centerX, this.cameras.main.centerY, updated);
+      return;
+    }
+
+    console.log('Submitting score:', this.score, 'with initials:', initials);
     this.teardownInitialsInput();
-    const updated = this.updateHighScores(this.score, initials);
+    const updated = await saveHighScore(this.score, initials);
+    console.log('High scores updated:', updated);
     this.showGameOverPanel(this.cameras.main.centerX, this.cameras.main.centerY, updated);
   }
 
@@ -1013,43 +1033,6 @@ export default class GameScene extends Phaser.Scene {
     return map[key] || {};
   }
 
-  qualifiesForHighScore(score) {
-    const scores = this.loadHighScores();
-    if (scores.length < 5) return true;
-    const lowest = scores[scores.length - 1];
-    return score > (lowest?.score ?? 0);
-  }
-
-  loadHighScores() {
-    try {
-      const raw = localStorage.getItem('bike-runner-highscores');
-      const parsed = raw ? JSON.parse(raw) : [];
-      if (!Array.isArray(parsed)) return [];
-      return parsed.map((entry) => {
-        if (typeof entry === 'number') {
-          return { score: entry, initials: '---' };
-        }
-        return {
-          score: Number(entry.score) || 0,
-          initials: typeof entry.initials === 'string' ? entry.initials : '---'
-        };
-      });
-    } catch (e) {
-      return [];
-    }
-  }
-
-  updateHighScores(score, initials = '---') {
-    const scores = this.loadHighScores();
-    scores.push({ score, initials: initials || '---' });
-    const sorted = scores.sort((a, b) => b.score - a.score).slice(0, 5);
-    try {
-      localStorage.setItem('bike-runner-highscores', JSON.stringify(sorted));
-    } catch (e) {
-      // ignore storage errors
-    }
-    return sorted;
-  }
 
   checkLevelTransition() {
     if (this.currentLevel === 1 && this.score >= 500 && !this.levelTransitionTriggered) {
