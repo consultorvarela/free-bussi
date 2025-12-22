@@ -573,9 +573,10 @@ export default class GameScene extends Phaser.Scene {
       obstacle.body.setSize(40, 80);
       obstacle.body.setOffset(3, 10);
     } else {
-      // Low obstacle: cone triangle area (excluding empty space)
-      obstacle.body.setSize(32, 40);
-      obstacle.body.setOffset(7, 6);
+      // Low obstacle: cone triangle (x:8-38, y:0-38) = 30x38 visual
+      // Hitbox slightly smaller for fair gameplay
+      obstacle.body.setSize(26, 36);
+      obstacle.body.setOffset(10, 6);
     }
 
     obstacle.refreshBody();
